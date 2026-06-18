@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">ProCam</string>
+    <string name="recording_channel_name">录像服务</string>
+    <string name="recording_channel_description">录像前台服务通知</string>
+</resources>

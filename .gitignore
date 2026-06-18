@@ -1,0 +1,45 @@
+# ── Gradle ──
+.gradle/
+build/
+*/build/
+!*.jar
+!*.aar
+
+# ── IDE ──
+.idea/
+*.iml
+*.iws
+*.ipr
+out/
+.nav/
+
+# ── OS ──
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# ── Android ──
+local.properties
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+*.log
+captures/
+*.hprof
+*.trace
+
+# ── Kotlin ──
+*.kotlin_module
+
+# ── Misc ──
+*.swp
+*.swo
+*~
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
