@@ -88,6 +88,18 @@ class CapabilityDetector @Inject constructor(
     }
 
     /**
+     * 获取指定相机的 CameraCharacteristics
+     */
+    fun getCharacteristics(cameraId: String): CameraCharacteristics? {
+        return try {
+            cameraManager.getCameraCharacteristics(cameraId)
+        } catch (e: Exception) {
+            Logger.e(Logger.Tag.CAPABILITY, e, "Failed to get characteristics for: $cameraId")
+            null
+        }
+    }
+
+    /**
      * 获取所有相机 ID
      */
     fun getAllCameraIds(): List<String> {
@@ -139,7 +151,7 @@ class CapabilityDetector @Inject constructor(
             CameraFeature.MANUAL_ISO -> caps.isManualIsoSupported
             CameraFeature.MANUAL_SHUTTER -> caps.isManualShutterSupported
             CameraFeature.WHITE_BALANCE -> caps.whiteBalanceModes != null
-            CameraFeature.FLASH -> caps.flashModes != null
+            CameraFeature.FLASH -> caps.isFlashAvailable
             CameraFeature.ZOOM -> caps.isZoomSupported
             CameraFeature.ULTRA_WIDE -> caps.isUltraWideAvailable
             CameraFeature.TELEPHOTO -> caps.isTelephotoAvailable
@@ -235,9 +247,9 @@ class CapabilityDetector @Inject constructor(
         )?.toFloat()
 
         // 闪光灯
-        val flashModes = characteristics.get(
+        val isFlashAvailable = characteristics.get(
             CameraCharacteristics.FLASH_INFO_AVAILABLE
-        )
+        ) ?: false
 
         // 变焦
         val maxZoom = characteristics.get(
@@ -252,11 +264,8 @@ class CapabilityDetector @Inject constructor(
         val isLogicalCamera = capabilities.contains(
             CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA
         )
-        val physicalIds = if (isLogicalCamera) {
-            characteristics.get(
-                CameraCharacteristics.LOGICAL_MULTI_CAMERA_PHYSICAL_IDS
-            )?.toList()
-        } else null
+        // LOGICAL_MULTI_CAMERA_PHYSICAL_IDS 在 API 34 中已移除
+        val physicalIds: List<String>? = null
 
         // 检测超广角/长焦/微距
         val ultraWideAvailable = detectUltraWide(focalLengths)
@@ -331,7 +340,7 @@ class CapabilityDetector @Inject constructor(
             isExposureCompensationSupported = exposureCompensationRange != null,
             exposureCompensationRange = exposureCompensationRange,
             exposureCompensationStep = exposureCompensationStep,
-            flashModes = flashModes,
+            isFlashAvailable = isFlashAvailable,
             isZoomSupported = isZoomSupported,
             maxZoomRatio = maxZoom,
             availableFocalLengths = focalLengths,

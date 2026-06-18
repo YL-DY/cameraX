@@ -2,8 +2,10 @@ package com.professional.cam.camera.video
 
 import android.media.MediaCodec
 import android.media.MediaCodecInfo
+import android.media.MediaCodecList
 import android.media.MediaFormat
 import android.os.Build
+import android.os.Bundle
 import android.view.Surface
 import com.professional.cam.core.util.Logger
 import java.nio.ByteBuffer
@@ -191,9 +193,9 @@ class VideoEncoder @Inject constructor() {
         try {
             val codec = mediaCodec
             if (codec != null && Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
-                val params = MediaCodec.ParameterDescriptor.Builder(
-                    MediaFormat.KEY_BIT_RATE, newBitrate
-                ).build()
+                val params = Bundle().apply {
+                    putInt(MediaFormat.KEY_BIT_RATE, newBitrate)
+                }
                 codec.setParameters(params)
                 Logger.d(Logger.Tag.RECORDING, "Bitrate adjusted to: $newBitrate")
             }

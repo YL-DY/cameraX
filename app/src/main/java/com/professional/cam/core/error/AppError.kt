@@ -104,6 +104,21 @@ sealed class AppError : Throwable() {
         data class ReleaseFailed(
             val reason: String
         ) : CameraError()
+
+        /** 相机设置应用失败 */
+        data class SettingsApplyFailed(
+            val reason: String
+        ) : CameraError()
+
+        /** 拍照失败 */
+        data class PhotoCaptureFailed(
+            val reason: String
+        ) : CameraError()
+
+        /** 照片保存失败 */
+        data class PhotoSaveFailed(
+            val reason: String
+        ) : CameraError()
     }
 
     /** 录像错误（后续步骤实现） */

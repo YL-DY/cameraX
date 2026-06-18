@@ -49,8 +49,9 @@ val CameraCharacteristics.maxDigitalZoom: Float
 /** 判断是否支持光学防抖 */
 val CameraCharacteristics.isOisSupported: Boolean
     get() {
-        val modes = get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) ?: intArrayOf()
-        return modes.any { it == CaptureRequest.LENS_OPTICAL_STABILIZATION_MODE_ON }
+        // LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION 返回 Boolean?，表示是否支持 OIS
+        @Suppress("UNCHECKED_CAST")
+        return (get(CameraCharacteristics.LENS_INFO_AVAILABLE_OPTICAL_STABILIZATION) as? Boolean) ?: false
     }
 
 /** 获取传感器方向 */
@@ -63,10 +64,6 @@ val CameraCharacteristics.isLogicalCamera: Boolean
         val capabilities = get(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES) ?: intArrayOf()
         return capabilities.contains(CameraCharacteristics.REQUEST_AVAILABLE_CAPABILITIES_LOGICAL_MULTI_CAMERA)
     }
-
-/** 获取物理相机 ID 列表（逻辑相机） */
-val CameraCharacteristics.physicalCameraIds: Array<String>?
-    get() = get(CameraCharacteristics.LOGICAL_MULTI_CAMERA_PHYSICAL_IDS)
 
 /** 获取可用焦距列表 */
 val CameraCharacteristics.availableFocalLengths: FloatArray?
@@ -130,9 +127,9 @@ val CameraCharacteristics.whiteBalanceTemperatureRange: Range<Int>?
     // 色温范围通常通过 COLOR_CORRECTION_GAINS 和 AWB 模式控制
     // 实际范围需要根据设备查询
 
-/** 获取闪光灯模式 */
-val CameraCharacteristics.flashModes: IntArray?
-    get() = get(CameraCharacteristics.FLASH_INFO_AVAILABLE)
+/** 获取闪光灯是否可用 */
+val CameraCharacteristics.isFlashAvailable: Boolean
+    get() = get(CameraCharacteristics.FLASH_INFO_AVAILABLE) ?: false
 
 /** 获取最大视频帧率 */
 fun CameraCharacteristics.getMaxVideoFps(): Int {

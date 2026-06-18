@@ -2,6 +2,7 @@ package com.professional.cam.camera.manager
 
 import android.content.Context
 import android.hardware.camera2.CameraCaptureSession
+import android.hardware.camera2.CameraCharacteristics
 import android.hardware.camera2.CameraDevice
 import android.hardware.camera2.CameraManager
 import android.hardware.camera2.CaptureRequest
@@ -11,8 +12,11 @@ import android.os.Build
 import android.os.Handler
 import android.os.HandlerThread
 import android.view.Surface
+import com.professional.cam.camera.capability.CameraCapability
 import com.professional.cam.camera.capability.CapabilityDetector
+import com.professional.cam.camera.capture.StillCaptureManager
 import com.professional.cam.camera.config.CameraConfig
+import com.professional.cam.camera.config.CameraSettings
 import com.professional.cam.core.error.AppError
 import com.professional.cam.core.error.ErrorHandler
 import com.professional.cam.core.error.ErrorRecoveryManager
@@ -47,7 +51,8 @@ class Camera2Engine @Inject constructor(
     @ApplicationContext private val context: Context,
     private val capabilityDetector: CapabilityDetector,
     private val errorHandler: ErrorHandler,
-    private val errorRecoveryManager: ErrorRecoveryManager
+    private val errorRecoveryManager: ErrorRecoveryManager,
+    private val stillCaptureManager: StillCaptureManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -72,6 +77,12 @@ class Camera2Engine @Inject constructor(
 
     // ── 当前配置 ──
     private var currentConfig: CameraConfig? = null
+
+    // ── 当前相机能力 ──
+    private var cameraCapability: CameraCapability? = null
+
+    // ── 当前相机设置 ──
+    private var currentSettings: CameraSettings = CameraSettings.DEFAULT
 
     // ── 捕获结果回调 ──
     private var onCaptureResultCallback: ((CaptureResult) -> Unit)? = null
@@ -344,6 +355,8 @@ class Camera2Engine @Inject constructor(
 
     /**
      * 启动预览请求（重复请求）
+     *
+     * 使用 [PreviewRequestBuilder] 根据当前 [CameraSettings] 构建 [CaptureRequest]。
      */
     private fun startPreviewRequest(
         onStateChanged: ((CameraEngineState) -> Unit)? = null
@@ -360,13 +373,22 @@ class Camera2Engine @Inject constructor(
             return
         }
 
-        try {
-            // 创建预览请求构建器
-            val builder = device.createCaptureRequest(CameraDevice.TEMPLATE_PREVIEW)
-            previewSurface?.let { builder.addTarget(it) }
-            previewRequestBuilder = builder
+        val surface = previewSurface
+        if (surface == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot start preview: surface is null")
+            return
+        }
 
-            val request = builder.build()
+        try {
+            // 使用 PreviewRequestBuilder 统一构建 CaptureRequest
+            val requestBuilder = PreviewRequestBuilder(
+                cameraDevice = device,
+                surface = surface,
+                cameraCapability = cameraCapability
+            )
+            val request = requestBuilder.build(currentSettings)
+            previewRequestBuilder = null // 不再持有 builder 引用，统一由 PreviewRequestBuilder 管理
+
             Logger.d(Logger.Tag.CAMERA, "Starting preview repeating request")
 
             session.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
@@ -382,7 +404,7 @@ class Camera2Engine @Inject constructor(
                 override fun onCaptureFailed(
                     session: CameraCaptureSession,
                     request: CaptureRequest,
-                    failure: CameraCaptureSession.CaptureFailure
+                    failure: android.hardware.camera2.CaptureFailure
                 ) {
                     Logger.w(Logger.Tag.CAMERA, "Capture failed: ${failure.reason}")
                 }
@@ -415,28 +437,46 @@ class Camera2Engine @Inject constructor(
     }
 
     /**
-     * 更新预览请求参数
+     * 应用相机设置并更新预览 CaptureRequest
      *
-     * 用于后续专业控制（ISO、快门、WB 等）更新 CaptureRequest 参数。
+     * 根据 [CameraSettings] 使用 [PreviewRequestBuilder] 构建新的 [CaptureRequest]，
+     * 通过 [CameraCaptureSession.setRepeatingRequest] 实时生效。
      *
-     * @param params 参数更新 lambda，接收 [CaptureRequest.Builder] 进行操作
+     * 设计原则：
+     * - 不重新创建 [CameraCaptureSession]
+     * - 不中断预览
+     * - 参数修改实时生效
+     *
+     * @param settings 新的相机参数设置
      */
-    fun updatePreviewRequest(params: CaptureRequest.Builder.() -> Unit) {
-        val builder = previewRequestBuilder
-        if (builder == null) {
-            Logger.w(Logger.Tag.CAMERA, "Cannot update preview: builder is null")
+    fun applySettings(settings: CameraSettings) {
+        val session = captureSession
+        if (session == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot apply settings: session is null")
             return
         }
 
-        val session = captureSession
-        if (session == null) {
-            Logger.w(Logger.Tag.CAMERA, "Cannot update preview: session is null")
+        val device = cameraDevice
+        if (device == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot apply settings: device is null")
+            return
+        }
+
+        val surface = previewSurface
+        if (surface == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot apply settings: surface is null")
             return
         }
 
         try {
-            builder.params()
-            val request = builder.build()
+            // 使用 PreviewRequestBuilder 统一构建新的 CaptureRequest
+            val requestBuilder = PreviewRequestBuilder(
+                cameraDevice = device,
+                surface = surface,
+                cameraCapability = cameraCapability
+            )
+            val request = requestBuilder.build(settings)
+
             session.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
                 override fun onCaptureCompleted(
                     session: CameraCaptureSession,
@@ -447,9 +487,15 @@ class Camera2Engine @Inject constructor(
                     onCaptureResultCallback?.invoke(result)
                 }
             }, cameraHandler)
-            Logger.d(Logger.Tag.CAMERA, "Preview request updated")
+
+            // 更新当前设置缓存
+            currentSettings = settings
+            Logger.d(Logger.Tag.CAMERA, "Camera settings applied successfully")
         } catch (e: Exception) {
-            Logger.e(Logger.Tag.CAMERA, e, "Failed to update preview request")
+            Logger.e(Logger.Tag.CAMERA, e, "Failed to apply camera settings")
+            errorHandler.handle(
+                AppError.CameraError.SettingsApplyFailed(e.message ?: "Unknown")
+            )
         }
     }
 
@@ -491,14 +537,14 @@ class Camera2Engine @Inject constructor(
             try {
                 captureSession?.abortCaptures()
             } catch (e: Exception) {
-                Logger.w(Logger.Tag.CAMERA, e, "Error aborting captures")
+                Logger.e(Logger.Tag.CAMERA, e, "Error aborting captures")
             }
 
             // 2. 关闭 Session
             try {
                 captureSession?.close()
             } catch (e: Exception) {
-                Logger.w(Logger.Tag.CAMERA, e, "Error closing session")
+                Logger.e(Logger.Tag.CAMERA, e, "Error closing session")
             }
             captureSession = null
 
@@ -506,7 +552,7 @@ class Camera2Engine @Inject constructor(
             try {
                 cameraDevice?.close()
             } catch (e: Exception) {
-                Logger.w(Logger.Tag.CAMERA, e, "Error closing camera device")
+                Logger.e(Logger.Tag.CAMERA, e, "Error closing camera device")
             }
             cameraDevice = null
 
@@ -536,61 +582,179 @@ class Camera2Engine @Inject constructor(
     }
 
     // ════════════════════════════════════════════════════════════════
-    // 预留接口（后续步骤实现）
-    // 当前仅定义接口签名，不实现业务逻辑。
-    // 这些接口确保后续扩展无需重构 Camera2Engine。
+    // 设置查询
     // ════════════════════════════════════════════════════════════════
 
     /**
-     * 更新曝光补偿
+     * 获取当前相机能力
      *
-     * 通过 [CaptureRequest.CONTROL_AE_EXPOSURE_COMPENSATION] 设置曝光补偿值。
-     *
-     * @param ev 曝光补偿值（EV 单位），范围由 [CameraCharacteristics.CONTROL_AE_COMPENSATION_RANGE] 决定
+     * @return 当前相机的 [CameraCapability]，如果未初始化返回 null
      */
-    fun updateExposure(ev: Int) {
-        Logger.d(Logger.Tag.CAMERA, "updateExposure($ev) - reserved, not yet implemented")
-        // TODO: Step 4 - Manual Controls
+    internal fun getCameraCapability(): CameraCapability? = cameraCapability
+
+    /**
+     * 获取当前相机设置
+     *
+     * @return 当前 [CameraSettings]
+     */
+    internal fun getCurrentSettings(): CameraSettings = currentSettings
+
+    /**
+     * 设置相机能力（由 [CameraController] 在初始化时调用）
+     *
+     * @param capability 相机能力
+     */
+    internal fun setCameraCapability(capability: CameraCapability) {
+        cameraCapability = capability
+    }
+
+    // ════════════════════════════════════════════════════════════════
+    // 静态图像捕获
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 拍照（静态图像捕获）
+     *
+     * 委托给 [StillCaptureManager] 执行拍照。
+     * 使用 [CameraDevice.TEMPLATE_STILL_CAPTURE] 创建单帧捕获请求，
+     * 通过 [CameraCaptureSession.capture] 执行拍照。
+     *
+     * 拍照流程：
+     * 1. 初始化 ImageReader（如果尚未初始化或尺寸变化）
+     * 2. 通过 StillCaptureManager 执行 captureStillImage
+     * 3. 拍照完成后自动恢复预览请求
+     *
+     * 设计原则：
+     * - 不重建 [CameraCaptureSession]
+     * - 不中断预览
+     * - 支持连续拍照
+     *
+     * @param onResult 拍照结果回调
+     */
+    fun captureStill(onResult: (com.professional.cam.camera.capture.PhotoResult) -> Unit) {
+        val session = captureSession
+        if (session == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot capture: session is null")
+            onResult(com.professional.cam.camera.capture.PhotoResult.Error("Session not available"))
+            return
+        }
+
+        val device = cameraDevice
+        if (device == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot capture: device is null")
+            onResult(com.professional.cam.camera.capture.PhotoResult.Error("Camera device not available"))
+            return
+        }
+
+        // 获取预览 Surface 尺寸用于初始化 ImageReader
+        val surface = previewSurface
+        if (surface == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot capture: preview surface is null")
+            onResult(com.professional.cam.camera.capture.PhotoResult.Error("Preview surface not available"))
+            return
+        }
+
+        try {
+            // 1. 初始化 ImageReader（使用预览尺寸）
+            // 实际应用中应从 CameraCapability 获取最佳拍照尺寸
+            val photoWidth = cameraCapability?.let {
+                // 使用预览 Surface 的默认尺寸
+                1920
+            } ?: 1920
+            val photoHeight = cameraCapability?.let {
+                1080
+            } ?: 1080
+
+            stillCaptureManager.initializeImageReader(photoWidth, photoHeight)
+
+            // 2. 设置预览恢复回调
+            stillCaptureManager.setOnRestorePreviewCallback {
+                restorePreviewAfterCapture()
+            }
+
+            // 3. 计算 JPEG 方向
+            val jpegOrientation = getJpegOrientation()
+
+            // 4. 执行拍照
+            stillCaptureManager.captureStillImage(
+                session = session,
+                device = device,
+                settings = currentSettings,
+                jpegOrientation = jpegOrientation,
+                onResult = onResult
+            )
+
+            Logger.d(Logger.Tag.CAMERA, "Still capture initiated, orientation=$jpegOrientation")
+        } catch (e: Exception) {
+            Logger.e(Logger.Tag.CAMERA, e, "Failed to initiate still capture")
+            onResult(
+                com.professional.cam.camera.capture.PhotoResult.Error(
+                    "Capture initiation failed: ${e.message}"
+                )
+            )
+        }
     }
 
     /**
-     * 更新 ISO 感光度
+     * 拍照后恢复预览
      *
-     * 通过 [CaptureRequest.SENSOR_SENSITIVITY] 设置 ISO 值。
-     * 需要关闭自动增益控制（AE）。
-     *
-     * @param iso ISO 值，范围由 [CameraCharacteristics.SENSOR_INFO_SENSITIVITY_RANGE] 决定
+     * 使用当前 [CameraSettings] 重新提交预览请求。
      */
-    fun updateIso(iso: Int) {
-        Logger.d(Logger.Tag.CAMERA, "updateIso($iso) - reserved, not yet implemented")
-        // TODO: Step 4 - Manual Controls
+    private fun restorePreviewAfterCapture() {
+        val session = captureSession
+        if (session == null) return
+
+        val device = cameraDevice
+        if (device == null) return
+
+        val surface = previewSurface
+        if (surface == null) return
+
+        try {
+            val requestBuilder = PreviewRequestBuilder(
+                cameraDevice = device,
+                surface = surface,
+                cameraCapability = cameraCapability
+            )
+            val request = requestBuilder.build(currentSettings)
+
+            session.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
+                override fun onCaptureCompleted(
+                    session: CameraCaptureSession,
+                    request: CaptureRequest,
+                    result: TotalCaptureResult
+                ) {
+                    super.onCaptureCompleted(session, request, result)
+                    onCaptureResultCallback?.invoke(result)
+                }
+            }, cameraHandler)
+
+            Logger.d(Logger.Tag.CAMERA, "Preview restored after capture")
+        } catch (e: Exception) {
+            Logger.e(Logger.Tag.CAMERA, e, "Failed to restore preview after capture")
+        }
     }
 
     /**
-     * 更新对焦距离
+     * 计算 JPEG 方向值
      *
-     * 通过 [CaptureRequest.LENS_FOCUS_DISTANCE] 设置对焦距离。
-     * 需要关闭自动对焦（AF）。
+     * 根据传感器方向计算 JPEG 方向，确保照片方向正确。
      *
-     * @param distance 对焦距离（米），范围由 [CameraCharacteristics.LENS_INFO_MINIMUM_FOCUS_DISTANCE] 决定
+     * @return JPEG 方向值（0, 90, 180, 270）
      */
-    fun updateFocus(distance: Float) {
-        Logger.d(Logger.Tag.CAMERA, "updateFocus($distance) - reserved, not yet implemented")
-        // TODO: Step 4 - Manual Controls
-    }
-
-    /**
-     * 更新白平衡色温
-     *
-     * 通过 [CaptureRequest.COLOR_CORRECTION_MODE] 和
-     * [CaptureRequest.COLOR_CORRECTION_GAINS] 设置白平衡。
-     * 需要关闭自动白平衡（AWB）。
-     *
-     * @param kelvin 色温值（开尔文），范围由 [CameraCharacteristics.SENSOR_INFO_WHITE_BALANCE_RANGE] 决定
-     */
-    fun updateWhiteBalance(kelvin: Int) {
-        Logger.d(Logger.Tag.CAMERA, "updateWhiteBalance($kelvin) - reserved, not yet implemented")
-        // TODO: Step 4 - Manual Controls
+    private fun getJpegOrientation(): Int {
+        val cameraId = currentConfig?.cameraId ?: return 0
+        return try {
+            val manager = cameraManager ?: return 0
+            val characteristics = manager.getCameraCharacteristics(cameraId)
+            val sensorOrientation = characteristics.get(
+                CameraCharacteristics.SENSOR_ORIENTATION
+            ) ?: 0
+            sensorOrientation
+        } catch (e: Exception) {
+            Logger.w(Logger.Tag.CAMERA, "Failed to get sensor orientation: ${e.message}")
+            0
+        }
     }
 
     /**
@@ -615,25 +779,14 @@ class Camera2Engine @Inject constructor(
     }
 
     /**
-     * 拍照（静态图像捕获）
-     *
-     * 使用 [CameraDevice.TEMPLATE_STILL_CAPTURE] 创建单帧捕获请求，
-     * 通过 [CameraCaptureSession.capture] 执行拍照。
-     * 支持 JPEG、RAW 或 JPEG+RAW 输出。
-     */
-    fun captureStill() {
-        Logger.d(Logger.Tag.CAMERA, "captureStill() - reserved, not yet implemented")
-        // TODO: Step 5 - Video Recording / Step 6 - Photo Capture
-    }
-
-    /**
      * 释放所有资源
      *
-     * 包括关闭相机和停止 HandlerThread。
+     * 包括关闭相机、释放 StillCaptureManager 和停止 HandlerThread。
      * 调用后此实例不再可用，需要重新 [initialize]。
      */
     fun release() {
         Logger.d(Logger.Tag.CAMERA, "Releasing Camera2Engine")
+        stillCaptureManager.release()
         close()
         stopCameraThread()
         isInitialized = false
@@ -656,7 +809,7 @@ class Camera2Engine @Inject constructor(
         try {
             cameraThread?.quitSafely()
         } catch (e: Exception) {
-            Logger.w(Logger.Tag.CAMERA, e, "Error stopping camera thread")
+            Logger.e(Logger.Tag.CAMERA, e, "Error stopping camera thread")
         }
         cameraThread = null
         cameraHandler = null

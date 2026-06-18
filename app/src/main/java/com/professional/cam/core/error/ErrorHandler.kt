@@ -161,6 +161,22 @@ class ErrorHandler @Inject constructor() {
                 userMessage = "相机释放失败: ${error.reason}",
                 shouldNotifyUser = false
             )
+            is AppError.CameraError.SettingsApplyFailed -> ErrorResult(
+                isRecoverable = true,
+                userMessage = "相机参数设置失败: ${error.reason}",
+                shouldNotifyUser = true,
+                recoveryAction = RecoveryAction.RECREATE_SESSION
+            )
+            is AppError.CameraError.PhotoCaptureFailed -> ErrorResult(
+                isRecoverable = false,
+                userMessage = "拍照失败: ${error.reason}",
+                shouldNotifyUser = true
+            )
+            is AppError.CameraError.PhotoSaveFailed -> ErrorResult(
+                isRecoverable = false,
+                userMessage = "照片保存失败: ${error.reason}",
+                shouldNotifyUser = true
+            )
         }
     }
 

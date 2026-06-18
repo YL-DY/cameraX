@@ -44,27 +44,20 @@ fun ControlsPanel(
             .background(DarkSurface, RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp))
             .padding(8.dp)
     ) {
-        // 录制按钮
+        // 录制按钮（预留 - CameraController 暂未暴露录制接口）
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.Center
         ) {
             Button(
-                onClick = {
-                    if (cameraController?.isRecording?.value == true) {
-                        cameraController.stopRecording()
-                    } else {
-                        cameraController?.startRecording()
-                    }
-                },
+                onClick = { /* TODO: 接入录制功能 */ },
                 colors = ButtonDefaults.buttonColors(
-                    containerColor = if (cameraController?.isRecording?.value == true)
-                        RecordingRed else ControlActive
+                    containerColor = ControlActive
                 ),
                 shape = RoundedCornerShape(50)
             ) {
                 Text(
-                    text = if (cameraController?.isRecording?.value == true) "■ STOP" else "● REC",
+                    text = "● REC",
                     color = TextPrimary,
                     fontFamily = FontFamily.Monospace,
                     fontSize = 14.sp

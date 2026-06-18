@@ -23,13 +23,13 @@ class WhiteBalanceController(
 
     override val name: String = "White Balance"
 
-    private val _currentValue = MutableStateFlow(WhiteBalanceValue.Auto)
+    private val _currentValue = MutableStateFlow<WhiteBalanceValue>(WhiteBalanceValue.Auto)
     override val currentValue: StateFlow<WhiteBalanceValue> = _currentValue.asStateFlow()
 
     private val _isAuto = MutableStateFlow(true)
     override val isAuto: StateFlow<Boolean> = _isAuto.asStateFlow()
 
-    private var lastManualValue: WhiteBalanceValue = WhiteBalanceValue.Daylight
+    private var lastManualValue: WhiteBalanceValue = WhiteBalanceValue.Preset.Daylight
 
     override fun setValue(value: WhiteBalanceValue) {
         _currentValue.value = value
@@ -58,7 +58,8 @@ class WhiteBalanceController(
                     CaptureRequest.CONTROL_AWB_MODE_AUTO)
                 builder.set(CaptureRequest.COLOR_CORRECTION_MODE,
                     CaptureRequest.COLOR_CORRECTION_MODE_FAST)
-                builder.set(CaptureRequest.COLOR_CORRECTION_TEMPERATURE, null)
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE,
+                    CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
             is WhiteBalanceValue.CustomTemperature -> {
                 builder.set(CaptureRequest.CONTROL_AWB_MODE,
@@ -69,11 +70,17 @@ class WhiteBalanceController(
                     temperatureRange?.lower ?: 2500,
                     temperatureRange?.upper ?: 8000
                 )
-                builder.set(CaptureRequest.COLOR_CORRECTION_TEMPERATURE, clamped)
+                // COLOR_CORRECTION_TEMPERATURE was removed in SDK 34;
+                // use COLOR_CORRECTION_GAINS for custom white balance
+                val gains = android.hardware.camera2.params.RggbChannelVector(
+                    clamped / 5000f, 1.0f, 1.0f, clamped / 5000f
+                )
+                builder.set(CaptureRequest.COLOR_CORRECTION_GAINS, gains)
             }
             is WhiteBalanceValue.Preset -> {
                 builder.set(CaptureRequest.CONTROL_AWB_MODE, wb.camera2Mode)
-                builder.set(CaptureRequest.COLOR_CORRECTION_TEMPERATURE, null)
+                builder.set(CaptureRequest.COLOR_CORRECTION_MODE,
+                    CaptureRequest.COLOR_CORRECTION_MODE_FAST)
             }
         }
     }

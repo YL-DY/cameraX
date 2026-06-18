@@ -3,10 +3,17 @@ package com.professional.cam.camera.manager
 import android.hardware.camera2.CaptureResult
 import android.view.Surface
 import com.professional.cam.camera.capability.CameraCapabilities
+import com.professional.cam.camera.capability.CameraCapability
 import com.professional.cam.camera.capability.CapabilityDetector
+import com.professional.cam.camera.capture.PhotoResult
 import com.professional.cam.camera.config.CameraConfig
+import com.professional.cam.camera.config.CameraSettings
+import com.professional.cam.camera.config.ExposureMode
+import com.professional.cam.camera.config.FlashMode
+import com.professional.cam.camera.config.FocusMode
 import com.professional.cam.camera.config.FpsConfig
 import com.professional.cam.camera.config.ResolutionConfig
+import com.professional.cam.camera.config.WhiteBalanceMode
 import com.professional.cam.core.error.AppError
 import com.professional.cam.core.error.ErrorHandler
 import com.professional.cam.core.error.ErrorRecoveryManager
@@ -64,9 +71,18 @@ class CameraController @Inject constructor(
     private var currentCapabilities: CameraCapabilities? = null
     val capabilities: CameraCapabilities? get() = currentCapabilities
 
+    // ── 统一能力模型（CameraCapability） ──
+
+    private var cameraCapability: CameraCapability? = null
+
     // ── 配置 ──
 
     private var currentConfig: CameraConfig = CameraConfig()
+
+    // ── 统一参数模型（Single Source of Truth） ──
+
+    private val _settings = MutableStateFlow(CameraSettings.DEFAULT)
+    val settings: StateFlow<CameraSettings> = _settings.asStateFlow()
 
     // ── 捕获结果回调（供后续专业控制使用） ──
 
@@ -115,10 +131,22 @@ class CameraController @Inject constructor(
             currentCapabilities = capabilityDetector.getCapabilities(cameraId)
                 ?: capabilityDetector.detectCamera(cameraId)
 
-            // 3. 设置捕获结果回调转发
+            // 3. 构建统一 CameraCapability 并设置到 Camera2Engine
+            currentCapabilities?.let { caps ->
+                val characteristics = capabilityDetector.getCharacteristics(cameraId)
+                characteristics?.let { chars ->
+                    cameraCapability = CameraCapability.fromCharacteristics(chars)
+                    cameraCapability?.let { camera2Engine.setCameraCapability(it) }
+                }
+            }
+
+            // 4. 设置捕获结果回调转发
             camera2Engine.setOnCaptureResultCallback { result ->
                 onCaptureResultCallback?.invoke(result)
             }
+
+            // 5. 重置设置为默认值
+            _settings.value = CameraSettings.DEFAULT
 
             isInitialized = true
             _state.value = CameraState.Initialized
@@ -414,6 +442,173 @@ class CameraController @Inject constructor(
      */
     fun setOnCaptureResultCallback(callback: ((CaptureResult) -> Unit)?) {
         onCaptureResultCallback = callback
+    }
+
+    // ── 统一控制接口 ──
+    //
+    // 所有参数修改遵循以下流程：
+    // 1. 更新 _settings（Single Source of Truth）
+    // 2. 调用 camera2Engine.applySettings() 应用新参数
+    // 3. 不重建 CameraSession，不中断预览
+
+    /**
+     * 批量更新相机设置
+     *
+     * 直接传入完整 [CameraSettings] 对象，适用于需要同时修改多个参数的场景。
+     * 内部会进行参数校验并调用 [Camera2Engine.applySettings]。
+     *
+     * @param settings 新的相机设置
+     */
+    fun updateSettings(settings: CameraSettings) {
+        Logger.d(Logger.Tag.CAMERA, "updateSettings: $settings")
+        _settings.value = settings
+        camera2Engine.applySettings(settings)
+    }
+
+    /**
+     * 更新 ISO 值
+     *
+     * 自动将曝光模式切换为 [ExposureMode.MANUAL_ISO]。
+     * 如果当前已是 [ExposureMode.MANUAL] 则保持。
+     *
+     * @param iso ISO 值，范围由 [CameraCapability.isoRange] 决定
+     */
+    fun updateIso(iso: Int) {
+        Logger.d(Logger.Tag.CAMERA, "updateIso: $iso")
+        val current = _settings.value
+        val newMode = when (current.exposureMode) {
+            ExposureMode.MANUAL -> ExposureMode.MANUAL
+            else -> ExposureMode.MANUAL_ISO
+        }
+        val newSettings = current.copy(
+            exposureMode = newMode,
+            iso = iso
+        )
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 更新曝光时间（快门速度）
+     *
+     * 自动将曝光模式切换为 [ExposureMode.MANUAL_SHUTTER]。
+     * 如果当前已是 [ExposureMode.MANUAL] 则保持。
+     *
+     * @param time 曝光时间（纳秒），范围由 [CameraCapability.exposureTimeRange] 决定
+     */
+    fun updateExposureTime(time: Long) {
+        Logger.d(Logger.Tag.CAMERA, "updateExposureTime: $time")
+        val current = _settings.value
+        val newMode = when (current.exposureMode) {
+            ExposureMode.MANUAL -> ExposureMode.MANUAL
+            else -> ExposureMode.MANUAL_SHUTTER
+        }
+        val newSettings = current.copy(
+            exposureMode = newMode,
+            exposureTime = time
+        )
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 更新对焦距离
+     *
+     * 自动将对焦模式切换为 [FocusMode.MANUAL]。
+     *
+     * @param distance 对焦距离，范围由 [CameraCapability.focusDistanceRange] 决定
+     */
+    fun updateFocusDistance(distance: Float) {
+        Logger.d(Logger.Tag.CAMERA, "updateFocusDistance: $distance")
+        val current = _settings.value
+        val newSettings = current.copy(
+            focusMode = FocusMode.MANUAL,
+            focusDistance = distance
+        )
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 更新白平衡模式
+     *
+     * @param mode 白平衡模式，参见 [WhiteBalanceMode]
+     */
+    fun updateWhiteBalance(mode: WhiteBalanceMode) {
+        Logger.d(Logger.Tag.CAMERA, "updateWhiteBalance: $mode")
+        val current = _settings.value
+        val newSettings = current.copy(whiteBalanceMode = mode)
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 更新缩放比例
+     *
+     * @param ratio 缩放比例，1.0 表示未缩放，最大值由 [CameraCapability.maxZoomRatio] 决定
+     */
+    fun updateZoomRatio(ratio: Float) {
+        Logger.d(Logger.Tag.CAMERA, "updateZoomRatio: $ratio")
+        val current = _settings.value
+        val newSettings = current.copy(zoomRatio = ratio)
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 更新闪光灯模式
+     *
+     * @param mode 闪光灯模式，参见 [FlashMode]
+     */
+    fun updateFlashMode(mode: FlashMode) {
+        Logger.d(Logger.Tag.CAMERA, "updateFlashMode: $mode")
+        val current = _settings.value
+        val newSettings = current.copy(flashMode = mode)
+        _settings.value = newSettings
+        camera2Engine.applySettings(newSettings)
+    }
+
+    /**
+     * 重置为全自动模式
+     *
+     * 将所有参数恢复为 [CameraSettings.DEFAULT]。
+     * 适用于用户一键切回自动模式。
+     */
+    fun resetToAuto() {
+        Logger.d(Logger.Tag.CAMERA, "resetToAuto")
+        _settings.value = CameraSettings.DEFAULT
+        camera2Engine.applySettings(CameraSettings.DEFAULT)
+    }
+
+    // ── 拍照 ──
+
+    /**
+     * 拍照
+     *
+     * 委托给 [Camera2Engine.captureStill] 执行拍照。
+     * Controller 只负责流程协调，不直接操作 Camera2 API。
+     *
+     * 拍照流程：
+     * 1. 检查相机状态（必须处于 Previewing 状态）
+     * 2. 调用 Camera2Engine.captureStill() 执行拍照
+     * 3. 拍照完成后通过回调返回 [PhotoResult]
+     *
+     * 设计原则：
+     * - Controller 仅协调流程，不直接操作 CameraDevice
+     * - 不重建 CameraSession
+     * - 拍照后自动恢复预览
+     *
+     * @param onResult 拍照结果回调
+     */
+    fun capturePhoto(onResult: (PhotoResult) -> Unit) {
+        if (!isPreviewActive) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot capture photo: preview not active")
+            onResult(PhotoResult.Error("Preview not active"))
+            return
+        }
+
+        Logger.d(Logger.Tag.CAMERA, "capturePhoto called")
+        camera2Engine.captureStill(onResult)
     }
 
     // ── 查询方法 ──

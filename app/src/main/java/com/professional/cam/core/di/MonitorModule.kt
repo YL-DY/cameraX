@@ -35,20 +35,26 @@ object MonitorModule {
 
     @Provides
     @ActivityScoped
-    fun provideMemoryMonitor(): MemoryMonitor {
-        return MemoryMonitor()
+    fun provideMemoryMonitor(
+        monitor: MemoryMonitor
+    ): MemoryMonitor {
+        return monitor
     }
 
     @Provides
     @ActivityScoped
-    fun provideBatteryMonitor(): BatteryMonitor {
-        return BatteryMonitor()
+    fun provideBatteryMonitor(
+        monitor: BatteryMonitor
+    ): BatteryMonitor {
+        return monitor
     }
 
     @Provides
     @ActivityScoped
-    fun provideTemperatureMonitor(): TemperatureMonitor {
-        return TemperatureMonitor()
+    fun provideTemperatureMonitor(
+        monitor: TemperatureMonitor
+    ): TemperatureMonitor {
+        return monitor
     }
 
     @Provides

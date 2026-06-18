@@ -21,7 +21,8 @@ object Routes {
 
 @Composable
 fun ProCamNavGraph(
-    navController: NavHostController
+    navController: NavHostController,
+    cameraController: com.professional.cam.camera.manager.CameraController?
 ) {
     NavHost(
         navController = navController,
@@ -29,6 +30,7 @@ fun ProCamNavGraph(
     ) {
         composable(Routes.CAMERA) {
             CameraScreen(
+                cameraController = cameraController,
                 onNavigateToSettings = {
                     navController.navigate(Routes.SETTINGS)
                 }

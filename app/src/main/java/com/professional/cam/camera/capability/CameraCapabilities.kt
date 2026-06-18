@@ -47,7 +47,7 @@ data class CameraCapabilities(
     val exposureCompensationStep: Float?,
 
     // ── 闪光灯 ──
-    val flashModes: IntArray?,
+    val isFlashAvailable: Boolean,
 
     // ── 变焦 ──
     val isZoomSupported: Boolean,

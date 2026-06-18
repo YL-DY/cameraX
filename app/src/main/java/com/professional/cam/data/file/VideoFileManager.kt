@@ -83,10 +83,8 @@ class VideoFileManager @Inject constructor(
             if (uri != null) {
                 // 复制文件内容
                 resolver.openOutputStream(uri)?.use { outputStream ->
-                    FileOutputStream(outputStream.channel).use { fileOut ->
-                        sourceFile.inputStream().use { input ->
-                            input.copyTo(fileOut)
-                        }
+                    sourceFile.inputStream().use { input ->
+                        input.copyTo(outputStream)
                     }
                 }
 
@@ -156,14 +154,14 @@ class VideoFileManager @Inject constructor(
      * 清理缓存文件
      */
     fun cleanCache() {
-        FileUtil.cleanCacheDir(context.cacheDir)
+        FileUtil.cleanCache(context)
     }
 
     /**
      * 获取缓存文件大小
      */
     fun getCacheSize(): Long {
-        return FileUtil.getDirectorySize(context.cacheDir)
+        return FileUtil.getAvailableStorageBytes()
     }
 
     // ── 私有方法 ──
