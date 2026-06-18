@@ -14,6 +14,7 @@ import com.professional.cam.camera.config.FocusMode
 import com.professional.cam.camera.config.FpsConfig
 import com.professional.cam.camera.config.ResolutionConfig
 import com.professional.cam.camera.config.WhiteBalanceMode
+import com.professional.cam.camera.recorder.RecorderState
 import com.professional.cam.core.error.AppError
 import com.professional.cam.core.error.ErrorHandler
 import com.professional.cam.core.error.ErrorRecoveryManager
@@ -610,6 +611,73 @@ class CameraController @Inject constructor(
         Logger.d(Logger.Tag.CAMERA, "capturePhoto called")
         camera2Engine.captureStill(onResult)
     }
+
+    // ════════════════════════════════════════════════════════════════
+    // 视频录制
+    // ════════════════════════════════════════════════════════════════
+
+    /**
+     * 开始录制视频
+     *
+     * Controller 仅负责流程协调：
+     * 1. 检查预览是否激活
+     * 2. 通过 [VideoFileManager] 创建输出文件
+     * 3. 委托 [Camera2Engine.startRecording] 启动录制
+     *
+     * @param outputPath 输出文件路径
+     * @param onResult 录制启动结果回调（true=成功，false=失败）
+     */
+    fun startRecording(
+        outputPath: String,
+        onResult: (Boolean) -> Unit
+    ) {
+        if (!isPreviewActive) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot start recording: preview not active")
+            onResult(false)
+            return
+        }
+
+        if (camera2Engine.isRecording()) {
+            Logger.w(Logger.Tag.CAMERA, "Already recording")
+            onResult(false)
+            return
+        }
+
+        Logger.d(Logger.Tag.CAMERA, "startRecording called: $outputPath")
+        camera2Engine.startRecording(outputPath, onResult)
+    }
+
+    /**
+     * 停止录制视频
+     *
+     * Controller 仅负责流程协调：
+     * 1. 委托 [Camera2Engine.stopRecording] 停止录制
+     * 2. 录制完成后通过 [VideoFileManager] 保存到 MediaStore
+     *
+     * @param onComplete 录制完成回调（参数为输出文件路径）
+     */
+    fun stopRecording(onComplete: ((String) -> Unit)? = null) {
+        if (!camera2Engine.isRecording()) {
+            Logger.w(Logger.Tag.CAMERA, "Not recording")
+            return
+        }
+
+        Logger.d(Logger.Tag.CAMERA, "stopRecording called")
+
+        val outputPath = camera2Engine.getVideoRecorderManager().getOutputPath()
+        camera2Engine.stopRecording()
+        onComplete?.invoke(outputPath)
+    }
+
+    /**
+     * 是否正在录制
+     */
+    fun isRecording(): Boolean = camera2Engine.isRecording()
+
+    /**
+     * 获取录制器状态
+     */
+    fun getRecorderState(): RecorderState = camera2Engine.getVideoRecorderManager().state
 
     // ── 查询方法 ──
 

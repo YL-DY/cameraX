@@ -216,6 +216,17 @@ class ErrorHandler @Inject constructor() {
                 shouldNotifyUser = false,
                 recoveryAction = RecoveryAction.START_NEW_SEGMENT
             )
+            is AppError.RecordingError.RecordingStartFailed -> ErrorResult(
+                isRecoverable = true,
+                userMessage = "录制启动失败: ${error.reason}",
+                shouldNotifyUser = true,
+                recoveryAction = RecoveryAction.RETRY_OPEN_CAMERA
+            )
+            is AppError.RecordingError.RecordingSaveFailed -> ErrorResult(
+                isRecoverable = false,
+                userMessage = "视频保存失败: ${error.reason}",
+                shouldNotifyUser = true
+            )
         }
     }
 

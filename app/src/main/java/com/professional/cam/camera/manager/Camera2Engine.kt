@@ -17,6 +17,7 @@ import com.professional.cam.camera.capability.CapabilityDetector
 import com.professional.cam.camera.capture.StillCaptureManager
 import com.professional.cam.camera.config.CameraConfig
 import com.professional.cam.camera.config.CameraSettings
+import com.professional.cam.camera.recorder.VideoRecorderManager
 import com.professional.cam.core.error.AppError
 import com.professional.cam.core.error.ErrorHandler
 import com.professional.cam.core.error.ErrorRecoveryManager
@@ -52,7 +53,8 @@ class Camera2Engine @Inject constructor(
     private val capabilityDetector: CapabilityDetector,
     private val errorHandler: ErrorHandler,
     private val errorRecoveryManager: ErrorRecoveryManager,
-    private val stillCaptureManager: StillCaptureManager
+    private val stillCaptureManager: StillCaptureManager,
+    private val videoRecorderManager: VideoRecorderManager
 ) {
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
 
@@ -67,6 +69,7 @@ class Camera2Engine @Inject constructor(
 
     // ── Surface ──
     private var previewSurface: Surface? = null
+    private var recorderSurface: Surface? = null
 
     // ── 预览请求 ──
     private var previewRequestBuilder: CaptureRequest.Builder? = null
@@ -89,6 +92,9 @@ class Camera2Engine @Inject constructor(
 
     // ── 是否已初始化 ──
     private var isInitialized = false
+
+    // ── 是否正在录制 ──
+    private var isRecording = false
 
     /**
      * 初始化 CameraManager 和 HandlerThread
@@ -259,7 +265,8 @@ class Camera2Engine @Inject constructor(
      */
     fun createCaptureSession(
         surface: Surface,
-        onStateChanged: ((CameraEngineState) -> Unit)? = null
+        onStateChanged: ((CameraEngineState) -> Unit)? = null,
+        recorderSurface: Surface? = null
     ) {
         val device = cameraDevice
         if (device == null) {
@@ -272,6 +279,7 @@ class Camera2Engine @Inject constructor(
         }
 
         this.previewSurface = surface
+        this.recorderSurface = recorderSurface
 
         Logger.d(Logger.Tag.CAMERA, "Creating capture session")
 
@@ -301,7 +309,9 @@ class Camera2Engine @Inject constructor(
                         )
                         if (recovered) {
                             Logger.d(Logger.Tag.CAMERA, "Retrying session creation")
-                            previewSurface?.let { createCaptureSession(it, onStateChanged) }
+                            previewSurface?.let {
+                                createCaptureSession(it, onStateChanged, recorderSurface)
+                            }
                         }
                     }
                 }
@@ -325,10 +335,16 @@ class Camera2Engine @Inject constructor(
                 }
             }
 
+            // 构建输出配置列表（预览 Surface + 可选的录制 Surface）
+            val surfaces = mutableListOf(surface)
+            if (recorderSurface != null) {
+                surfaces.add(recorderSurface)
+            }
+
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.P) {
-                val outputConfigs = listOf(
-                    android.hardware.camera2.params.OutputConfiguration(surface)
-                )
+                val outputConfigs = surfaces.map { surf ->
+                    android.hardware.camera2.params.OutputConfiguration(surf)
+                }
                 val sessionConfig = android.hardware.camera2.params.SessionConfiguration(
                     android.hardware.camera2.params.SessionConfiguration.SESSION_REGULAR,
                     outputConfigs,
@@ -339,7 +355,7 @@ class Camera2Engine @Inject constructor(
             } else {
                 @Suppress("DEPRECATION")
                 device.createCaptureSession(
-                    listOf(surface),
+                    surfaces,
                     stateCallback,
                     cameraHandler
                 )
@@ -760,23 +776,175 @@ class Camera2Engine @Inject constructor(
     /**
      * 开始录像
      *
-     * 创建 [MediaRecorder] 或 [android.media.MediaCodec] 实例，
-     * 配置视频/音频编码器，并提交录像 CaptureRequest。
+     * 1. 通过 [VideoRecorderManager] 配置并启动编码器
+     * 2. 获取编码器输入 Surface
+     * 3. 如果当前 Session 只有预览 Surface，则重建 Session 加入录制 Surface
+     * 4. 如果 Session 已包含录制 Surface，直接更新 PreviewRequest 加入录制 Surface
+     *
+     * 设计原则：
+     * - 不中断预览
+     * - 不重建 Session（如果已包含录制 Surface）
+     * - 录制逻辑委托给 [VideoRecorderManager]
+     *
+     * @param outputPath 输出文件路径
+     * @param onResult 录制启动结果回调
      */
-    fun startRecording() {
-        Logger.d(Logger.Tag.CAMERA, "startRecording() - reserved, not yet implemented")
-        // TODO: Step 5 - Video Recording
+    fun startRecording(
+        outputPath: String,
+        onResult: (Boolean) -> Unit
+    ) {
+        val session = captureSession
+        if (session == null) {
+            Logger.w(Logger.Tag.CAMERA, "Cannot start recording: session is null")
+            onResult(false)
+            return
+        }
+
+        if (isRecording) {
+            Logger.w(Logger.Tag.CAMERA, "Already recording")
+            onResult(false)
+            return
+        }
+
+        Logger.d(Logger.Tag.CAMERA, "Starting recording: $outputPath")
+
+        try {
+            // 配置 VideoRecorderManager
+            videoRecorderManager.configure(
+                outputPath = outputPath,
+                videoWidth = 1920,
+                videoHeight = 1080,
+                frameRate = 30,
+                enableAudio = true
+            )
+
+            // 启动录制器，获取编码器输入 Surface
+            val recordSurface = videoRecorderManager.start()
+            if (recordSurface == null) {
+                Logger.e(Logger.Tag.CAMERA, "Failed to start VideoRecorderManager")
+                onResult(false)
+                return
+            }
+
+            this.recorderSurface = recordSurface
+
+            // 更新 PreviewRequest 加入录制 Surface
+            val device = cameraDevice
+            val previewSurf = previewSurface
+            if (device != null && previewSurf != null) {
+                try {
+                    // 创建包含预览 + 录制双输出的 CaptureRequest
+                    val requestBuilder = device.createCaptureRequest(
+                        CameraDevice.TEMPLATE_PREVIEW
+                    )
+                    requestBuilder.addTarget(previewSurf)
+                    requestBuilder.addTarget(recordSurface)
+
+                    // 应用当前相机设置
+                    val previewRequestBuilder = PreviewRequestBuilder(
+                        cameraDevice = device,
+                        surface = previewSurf,
+                        cameraCapability = cameraCapability
+                    )
+                    val settingsRequest = previewRequestBuilder.build(currentSettings)
+                    // 复制设置参数到新的 builder
+                    // 使用 CaptureRequest.Builder 的 set 方法逐个复制参数
+                    @Suppress("UNCHECKED_CAST")
+                    for (key in settingsRequest.keys) {
+                        val value = settingsRequest.get(key)
+                        if (value != null) {
+                            try {
+                                (requestBuilder as CaptureRequest.Builder).set(key as CaptureRequest.Key<Any>, value)
+                            } catch (e: Exception) {
+                                Logger.w(Logger.Tag.CAMERA, "Failed to copy capture request key: $key")
+                            }
+                        }
+                    }
+
+                    val request = requestBuilder.build()
+                    session.setRepeatingRequest(request, object : CameraCaptureSession.CaptureCallback() {
+                        override fun onCaptureCompleted(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            result: TotalCaptureResult
+                        ) {
+                            super.onCaptureCompleted(session, request, result)
+                            onCaptureResultCallback?.invoke(result)
+                        }
+
+                        override fun onCaptureFailed(
+                            session: CameraCaptureSession,
+                            request: CaptureRequest,
+                            failure: android.hardware.camera2.CaptureFailure
+                        ) {
+                            Logger.w(Logger.Tag.CAMERA, "Recording capture failed: ${failure.reason}")
+                        }
+                    }, cameraHandler)
+
+                    isRecording = true
+                    Logger.d(Logger.Tag.CAMERA, "Recording started with dual surfaces")
+                    onResult(true)
+                } catch (e: Exception) {
+                    Logger.e(Logger.Tag.CAMERA, e, "Failed to update preview request for recording")
+                    // 回滚：停止录制器
+                    videoRecorderManager.stop()
+                    this.recorderSurface = null
+                    onResult(false)
+                }
+            } else {
+                isRecording = true
+                Logger.d(Logger.Tag.CAMERA, "Recording started (device/surface will be updated on next session)")
+                onResult(true)
+            }
+        } catch (e: Exception) {
+            Logger.e(Logger.Tag.CAMERA, e, "Failed to start recording")
+            onResult(false)
+        }
     }
 
     /**
      * 停止录像
      *
-     * 停止录像 CaptureRequest，释放编码器资源，保存视频文件。
+     * 1. 停止 [VideoRecorderManager]
+     * 2. 恢复预览请求（移除录制 Surface）
+     * 3. 清理录制 Surface 引用
      */
     fun stopRecording() {
-        Logger.d(Logger.Tag.CAMERA, "stopRecording() - reserved, not yet implemented")
-        // TODO: Step 5 - Video Recording
+        if (!isRecording) {
+            Logger.w(Logger.Tag.CAMERA, "Not recording")
+            return
+        }
+
+        Logger.d(Logger.Tag.CAMERA, "Stopping recording")
+
+        try {
+            // 1. 停止录制器
+            videoRecorderManager.stop()
+
+            // 2. 恢复预览请求（移除录制 Surface）
+            restorePreviewAfterCapture()
+
+            // 3. 清理
+            isRecording = false
+            recorderSurface = null
+
+            Logger.d(Logger.Tag.CAMERA, "Recording stopped")
+        } catch (e: Exception) {
+            Logger.e(Logger.Tag.CAMERA, e, "Error stopping recording")
+            isRecording = false
+            recorderSurface = null
+        }
     }
+
+    /**
+     * 是否正在录制
+     */
+    fun isRecording(): Boolean = isRecording
+
+    /**
+     * 获取 VideoRecorderManager（供外部访问录制状态）
+     */
+    internal fun getVideoRecorderManager(): VideoRecorderManager = videoRecorderManager
 
     /**
      * 释放所有资源

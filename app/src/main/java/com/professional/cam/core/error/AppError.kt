@@ -121,7 +121,7 @@ sealed class AppError : Throwable() {
         ) : CameraError()
     }
 
-    /** 录像错误（后续步骤实现） */
+    /** 录像错误 */
     sealed class RecordingError : AppError() {
         data object InsufficientStorage : RecordingError()
 
@@ -139,6 +139,17 @@ sealed class AppError : Throwable() {
         data object MaxDurationReached : RecordingError()
 
         data object MaxFileSizeReached : RecordingError()
+
+        /** 录制启动失败 */
+        data class RecordingStartFailed(
+            val reason: String
+        ) : RecordingError()
+
+        /** 录制保存到 MediaStore 失败 */
+        data class RecordingSaveFailed(
+            val path: String,
+            val reason: String
+        ) : RecordingError()
     }
 
     /** 系统错误（后续步骤实现） */

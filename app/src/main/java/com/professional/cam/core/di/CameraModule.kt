@@ -1,11 +1,14 @@
 package com.professional.cam.core.di
 
 import android.content.Context
+import com.professional.cam.camera.audio.AudioRecorder
 import com.professional.cam.camera.capability.CapabilityDetector
 import com.professional.cam.camera.capture.CaptureResultProcessor
 import com.professional.cam.camera.capture.StillCaptureManager
 import com.professional.cam.camera.manager.CameraController
 import com.professional.cam.camera.manager.Camera2Engine
+import com.professional.cam.camera.recorder.VideoRecorderManager
+import com.professional.cam.camera.video.VideoEncoder
 import com.professional.cam.core.error.ErrorHandler
 import com.professional.cam.core.error.ErrorRecoveryManager
 import dagger.Module
@@ -23,6 +26,7 @@ import dagger.hilt.android.scopes.ActivityScoped
  * - [Camera2Engine]: Camera2 专业相机引擎
  * - [StillCaptureManager]: 拍照管理（ImageReader + CaptureRequest）
  * - [CaptureResultProcessor]: 拍照结果保存（MediaStore + EXIF）
+ * - [VideoRecorderManager]: 视频录制管理（MediaMuxer + 状态机）
  *
  * 设计原则：
  * - [Camera2Engine] 是 [android.hardware.camera2.CameraDevice]、
@@ -50,6 +54,30 @@ object CameraModule {
 
     @Provides
     @ActivityScoped
+    fun provideVideoEncoder(): VideoEncoder {
+        return VideoEncoder()
+    }
+
+    @Provides
+    @ActivityScoped
+    fun provideAudioRecorder(): AudioRecorder {
+        return AudioRecorder()
+    }
+
+    @Provides
+    @ActivityScoped
+    fun provideVideoRecorderManager(
+        videoEncoder: VideoEncoder,
+        audioRecorder: AudioRecorder
+    ): VideoRecorderManager {
+        return VideoRecorderManager(
+            videoEncoder = videoEncoder,
+            audioRecorder = audioRecorder
+        )
+    }
+
+    @Provides
+    @ActivityScoped
     fun provideCameraController(
         camera2Engine: Camera2Engine,
         capabilityDetector: CapabilityDetector,
@@ -71,14 +99,16 @@ object CameraModule {
         capabilityDetector: CapabilityDetector,
         errorHandler: ErrorHandler,
         errorRecoveryManager: ErrorRecoveryManager,
-        stillCaptureManager: StillCaptureManager
+        stillCaptureManager: StillCaptureManager,
+        videoRecorderManager: VideoRecorderManager
     ): Camera2Engine {
         return Camera2Engine(
             context = context,
             capabilityDetector = capabilityDetector,
             errorHandler = errorHandler,
             errorRecoveryManager = errorRecoveryManager,
-            stillCaptureManager = stillCaptureManager
+            stillCaptureManager = stillCaptureManager,
+            videoRecorderManager = videoRecorderManager
         )
     }
 }
